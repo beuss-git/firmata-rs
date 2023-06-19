@@ -1,24 +1,17 @@
-extern crate firmata;
-extern crate serial;
-
 use firmata::*;
-use serial::*;
+use serialport::*;
 use std::{thread, time::Duration};
 
 fn main() {
-    let mut sp = serial::open("/dev/ttyACM0").unwrap();
+    let port = serialport::new("/dev/ttyACM0", 57_600)
+        .data_bits(DataBits::Eight)
+        .parity(Parity::None)
+        .stop_bits(StopBits::One)
+        .flow_control(FlowControl::None)
+        .open()
+        .expect("an opened serial port");
 
-    sp.reconfigure(&|settings| {
-        settings.set_baud_rate(Baud57600).unwrap();
-        settings.set_char_size(Bits8);
-        settings.set_parity(ParityNone);
-        settings.set_stop_bits(Stop1);
-        settings.set_flow_control(FlowNone);
-        Ok(())
-    })
-    .unwrap();
-
-    let mut b = firmata::Board::new(Box::new(sp)).unwrap();
+    let mut b = firmata::Board::new(Box::new(port)).expect("an initialized board");
 
     println!("firmware version {}", b.firmware_version());
     println!("firmware name {}", b.firmware_name());
@@ -27,19 +20,20 @@ fn main() {
     let led = 13;
     let button = 2;
 
-    b.set_pin_mode(led, firmata::OUTPUT).unwrap();
-    b.set_pin_mode(button, firmata::INPUT).unwrap();
+    b.set_pin_mode(led, firmata::OUTPUT).expect("pin mode set");
+    b.set_pin_mode(button, firmata::INPUT)
+        .expect("pin mode set");
 
-    b.report_digital(button, 1).unwrap();
+    b.report_digital(button, 1).expect("digital reporting mode");
 
     loop {
         b.read_and_decode().unwrap();
         if b.pins()[button as usize].value == 0 {
             println!("off");
-            b.digital_write(led, 0).unwrap();
+            b.digital_write(led, 0).expect("digital write");
         } else {
             println!("on");
-            b.digital_write(led, 1).unwrap();
+            b.digital_write(led, 1).expect("digital write");
         }
 
         thread::sleep(Duration::from_millis(100));
