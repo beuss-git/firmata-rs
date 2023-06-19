@@ -11,3 +11,6 @@ edition = "2021"
 
 [dev-dependencies]
 serialport = "~4"
+
+[dependencies]
+snafu = "~0.7"
