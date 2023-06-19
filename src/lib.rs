@@ -98,53 +98,46 @@ pub struct Pin {
     pub mode: u8,
 }
 
-/// A trait for implementing firmata boards.
+/// A trait for implementing Firmata boards.
 pub trait Firmata {
-    /// This function returns the raw I2C replies that have been read from
-    /// the board.
+    /// Get the raw I2C replies that have been read from the board.
     fn i2c_data(&mut self) -> &mut Vec<I2CReply>;
-    /// This function returns the pins that the board has access to.
+    /// Get pins that the board has access to.
     fn pins(&mut self) -> &Vec<Pin>;
-    /// This function returns the current firmata protocol version.
+    /// Get the current Firmata protocol version.
     fn protocol_version(&mut self) -> &String;
-    /// This function returns the firmware name.
+    /// Get the firmware name.
     fn firmware_name(&mut self) -> &String;
-    /// This function returns the firmware version.
+    /// Get the firmware version.
     fn firmware_version(&mut self) -> &String;
-    /// This function queries the board for available analog pins.
+    /// Query the board for available analog pins.
     fn query_analog_mapping(&mut self) -> Result<()>;
-    /// This function queries the board for all available capabilities.
+    /// Query the board for all available capabilities.
     fn query_capabilities(&mut self) -> Result<()>;
-    /// This function queries the board for current firmware and protocol
-    /// information.
+    /// Query the board for current firmware and protocol information.
     fn query_firmware(&mut self) -> Result<()>;
-    /// This function configures the `delay` in microseconds for I2C devices
-    /// that require a delay between when the register is written to and the
-    /// data in that register can be read.
+    /// Configure the `delay` in microseconds for I2C devices that require a delay between when the
+    /// register is written to and the data in that register can be read.
     fn i2c_config(&mut self, delay: i32) -> Result<()>;
-    /// This function reads `size` bytes from I2C device at the specified
-    /// `address`.
+    /// Read `size` bytes from I2C device at the specified `address`.
     fn i2c_read(&mut self, address: i32, size: i32) -> Result<()>;
-    /// This function writes `data` to the I2C device at
-    /// the specified `address`.
+    /// Write `data` to the I2C device at the specified `address`.
     fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()>;
-    /// This function sets the digital reporting `state`
-    /// of the specified `pin`.
+    /// Set the digital reporting `state` of the specified `pin`.
     fn report_digital(&mut self, pin: i32, state: i32) -> Result<()>;
-    /// This function sets the analog reporting `state` of the specified `pin`.
+    /// Set the analog reporting `state` of the specified `pin`.
     fn report_analog(&mut self, pin: i32, state: i32) -> Result<()>;
-    /// This function writes `level` to the analog `pin`.
+    /// Write `level` to the analog `pin`.
     fn analog_write(&mut self, pin: i32, level: i32) -> Result<()>;
-    /// This function writes `level` to the digital `pin`.
+    /// Write `level` to the digital `pin`.
     fn digital_write(&mut self, pin: i32, level: i32) -> Result<()>;
-    /// This function sets the `mode` of the specified `pin`.
+    /// Set the `mode` of the specified `pin`.
     fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()>;
-    /// This function reads from the firmata device and parses one firmata
-    /// message.
+    /// Read from the Firmata device and parses one Firmata message.
     fn read_and_decode(&mut self) -> Result<()>;
 }
 
-/// A structure representing a firmata board.
+/// A structure representing a Firmata board.
 pub struct Board<T: Read + Write> {
     pub connection: Box<T>,
     pub pins: Vec<Pin>,
@@ -395,7 +388,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                     REPORT_FIRMWARE => {
                         self.firmware_version = format!("{:o}.{:o}", buf[2], buf[3]);
                         self.firmware_name =
-                            str::from_utf8(&buf[4..buf.len() - 1]).unwrap().to_string();
+                            str::from_utf8(&buf[4..buf.len() - 1]).expect("a valid firmware name").to_string();
                         Ok(())
                     }
                     I2C_REPLY => {
