@@ -5,25 +5,26 @@ use firmata::*;
 use serial::*;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 fn init<T: firmata::Firmata>(board: &Arc<Mutex<T>>) {
     let mut b = board.lock().unwrap();
-    b.i2c_config(0);
-    b.i2c_write(0x09, "o".as_bytes());
-    thread::sleep_ms(10);
+    b.i2c_config(0).unwrap();
+    b.i2c_write(0x09, "o".as_bytes()).unwrap();
+    thread::sleep(Duration::from_millis(10));
 }
 
 fn set_rgb<T: firmata::Firmata>(board: &Arc<Mutex<T>>, rgb: [u8; 3]) {
     let mut b = board.lock().unwrap();
-    b.i2c_write(0x09, "n".as_bytes());
-    b.i2c_write(0x09, &rgb);
+    b.i2c_write(0x09, "n".as_bytes()).unwrap();
+    b.i2c_write(0x09, &rgb).unwrap();
 }
 
 fn read_rgb<T: firmata::Firmata>(board: &Arc<Mutex<T>>) -> Vec<u8> {
     {
         let mut b = board.lock().unwrap();
-        b.i2c_write(0x09, "g".as_bytes());
-        b.i2c_read(0x09, 3);
+        b.i2c_write(0x09, "g".as_bytes()).unwrap();
+        b.i2c_read(0x09, 3).unwrap();
     }
     loop {
         {
@@ -32,7 +33,7 @@ fn read_rgb<T: firmata::Firmata>(board: &Arc<Mutex<T>>) -> Vec<u8> {
                 return b.i2c_data().pop().unwrap().data;
             }
         }
-        thread::sleep_ms(10);
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -46,18 +47,17 @@ fn main() {
         settings.set_stop_bits(Stop1);
         settings.set_flow_control(FlowNone);
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 
     let board = Arc::new(Mutex::new(firmata::Board::new(Box::new(sp)).unwrap()));
 
     {
         let b = board.clone();
-        thread::spawn(move || {
-            loop {
-                b.lock().unwrap().read_and_decode();
-                b.lock().unwrap().query_firmware();
-                thread::sleep_ms(10);
-            }
+        thread::spawn(move || loop {
+            b.lock().unwrap().read_and_decode().unwrap();
+            b.lock().unwrap().query_firmware().unwrap();
+            thread::sleep(Duration::from_millis(10));
         });
     }
 
@@ -65,13 +65,13 @@ fn main() {
 
     set_rgb(&board, [255, 0, 0]);
     println!("rgb: {:?}", read_rgb(&board));
-    thread::sleep_ms(1000);
+    thread::sleep(Duration::from_millis(1000));
 
     set_rgb(&board, [0, 255, 0]);
     println!("rgb: {:?}", read_rgb(&board));
-    thread::sleep_ms(1000);
+    thread::sleep(Duration::from_millis(1000));
 
     set_rgb(&board, [0, 0, 255]);
     println!("rgb: {:?}", read_rgb(&board));
-    thread::sleep_ms(1000);
+    thread::sleep(Duration::from_millis(1000));
 }

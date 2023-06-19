@@ -3,7 +3,7 @@ extern crate serial;
 
 use firmata::*;
 use serial::*;
-use std::thread;
+use std::{thread, time::Duration};
 
 fn main() {
     let mut sp = serial::open("/dev/ttyACM0").unwrap();
@@ -15,7 +15,8 @@ fn main() {
         settings.set_stop_bits(Stop1);
         settings.set_flow_control(FlowNone);
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 
     let mut b = firmata::Board::new(Box::new(sp)).unwrap();
 
@@ -25,13 +26,16 @@ fn main() {
     println!("firmware name {}", b.firmware_name());
     println!("protocol version {}", b.protocol_version());
 
-    b.set_pin_mode(pin, firmata::PWM);
+    b.set_pin_mode(pin, firmata::PWM).expect("pin set");
+    b.analog_write(pin, 0).expect("pin write");
+    println!("Starting....");
+    thread::sleep(Duration::from_millis(3_000));
 
     loop {
-        for value in 0..255 {
-            b.analog_write(pin, value);
+        for value in (0..255).step_by(5) {
+            b.analog_write(pin, value).expect("pin write");
             println!("{}", value);
-            thread::sleep_ms(10);
+            thread::sleep(Duration::from_millis(500));
         }
     }
 }
