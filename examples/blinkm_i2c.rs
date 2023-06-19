@@ -43,14 +43,19 @@ fn main() {
         .open()
         .expect("an opened serial port");
 
-    let board = Arc::new(Mutex::new(firmata::Board::new(Box::new(port)).unwrap()));
+    let board = Arc::new(Mutex::new(
+        firmata::Board::new(Box::new(port)).expect("an initialized board"),
+    ));
 
     {
         let b = board.clone();
         thread::spawn(move || loop {
-            b.lock().unwrap().read_and_decode().expect("a message");
             b.lock()
-                .unwrap()
+                .expect("lock")
+                .read_and_decode()
+                .expect("a message");
+            b.lock()
+                .expect("lock")
                 .query_firmware()
                 .expect("firmware and protocol info");
             thread::sleep(Duration::from_millis(10));

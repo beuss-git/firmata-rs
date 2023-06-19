@@ -27,7 +27,7 @@ fn main() {
     b.report_digital(button, 1).expect("digital reporting mode");
 
     loop {
-        b.read_and_decode().unwrap();
+        b.read_and_decode().expect("a message");
         if b.pins()[button as usize].value == 0 {
             println!("off");
             b.digital_write(led, 0).expect("digital write");
