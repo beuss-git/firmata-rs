@@ -4,6 +4,7 @@
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::io::{Read, Write};
 use std::str;
+use std::time::Duration;
 
 pub const ENCODER_DATA: u8 = 0x61;
 pub const ANALOG_MAPPING_QUERY: u8 = 0x69;
@@ -57,6 +58,21 @@ pub enum Error {
     StdIoError { source: std::io::Error },
     Utf8Error { source: std::str::Utf8Error },
     MessageTooShort,
+    AttemptsExceeded,
+    TimeoutExceeded,
+}
+
+/// Received Firmata message
+#[derive(Clone, Debug)]
+pub enum Message {
+    ProtocolVersion,
+    Analog,
+    Digital,
+    EmptyResponse,
+    AnalogMappingResponse,
+    CapabilityResponse,
+    ReportFirmware,
+    I2CReply,
 }
 
 /// An I2C reply.
@@ -118,8 +134,21 @@ pub trait Firmata {
     fn digital_write(&mut self, pin: i32, level: i32) -> Result<(), Error>;
     /// Set the `mode` of the specified `pin`.
     fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<(), Error>;
-    /// Read from the Firmata device and parses one Firmata message.
-    fn read_and_decode(&mut self) -> Result<(), Error>;
+    /// Read from the Firmata device, parse one Firmata message and return its type.
+    fn read_and_decode(&mut self) -> Result<Message, Error>;
+    /// Read messages until one with the given SysEx passes.
+    fn read_and_decode_backoff(&mut self, back_off: BackOff) -> Result<(), Error>;
+}
+
+/// Back-off instructions.
+#[derive(Debug, Default)]
+pub struct BackOff {
+    /// Message to look out for. Retry with another attempt if it doesn't match.
+    pub message: Option<Message>,
+    /// Timeout duration.
+    pub timeout: Option<Duration>,
+    /// Maximum number of attempts.
+    pub attempts: Option<usize>,
 }
 
 /// A Firmata board representation.
@@ -130,11 +159,12 @@ pub struct Board<T: Read + Write> {
     pub protocol_version: String,
     pub firmware_name: String,
     pub firmware_version: String,
+    pub back_off: BackOff,
 }
 
 impl<T: Read + Write> Board<T> {
     /// Creates a new `Board` given a `Read+Write`.
-    pub fn new(connection: Box<T>) -> Result<Board<T>, Error> {
+    pub fn new(connection: Box<T>, back_off: BackOff) -> Result<Board<T>, Error> {
         let mut b = Board {
             connection,
             firmware_name: String::new(),
@@ -142,6 +172,7 @@ impl<T: Read + Write> Board<T> {
             protocol_version: String::new(),
             pins: vec![],
             i2c_data: vec![],
+            back_off,
         };
 
         b.query_firmware()?;
@@ -303,7 +334,7 @@ impl<T: Read + Write> Firmata for Board<T> {
             .with_context(|_| StdIoSnafu)
     }
 
-    fn read_and_decode(&mut self) -> Result<(), Error> {
+    fn read_and_decode(&mut self) -> Result<Message, Error> {
         let mut buf = vec![0; 3];
         self.connection
             .read_exact(&mut buf)
@@ -311,7 +342,7 @@ impl<T: Read + Write> Firmata for Board<T> {
         match buf[0] {
             PROTOCOL_VERSION => {
                 self.protocol_version = format!("{:o}.{:o}", buf[1], buf[2]);
-                Ok(())
+                Ok(Message::ProtocolVersion)
             }
             ANALOG_MESSAGE..=ANALOG_MESSAGE_BOUND => {
                 if buf.len() < 3 {
@@ -322,7 +353,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                 if self.pins.len() as i32 > pin {
                     self.pins[pin as usize].value = value;
                 }
-                Ok(())
+                Ok(Message::Analog)
             }
             DIGITAL_MESSAGE..=DIGITAL_MESSAGE_BOUND => {
                 if buf.len() < 3 {
@@ -337,7 +368,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                         self.pins[pin as usize].value = (value >> (i & 0x07)) & 0x01;
                     }
                 }
-                Ok(())
+                Ok(Message::Digital)
             }
             START_SYSEX => {
                 loop {
@@ -352,7 +383,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                     }
                 }
                 match buf[1] {
-                    END_SYSEX => Ok(()),
+                    END_SYSEX => Ok(Message::EmptyResponse),
                     ANALOG_MAPPING_RESPONSE => {
                         let mut i = 2;
                         // Also break before pins indexing is out of bounds.
@@ -363,7 +394,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                             }
                             i += 1;
                         }
-                        Ok(())
+                        Ok(Message::AnalogMappingResponse)
                     }
                     CAPABILITY_RESPONSE => {
                         let mut pin = 0;
@@ -383,7 +414,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                             });
                             i += 2;
                         }
-                        Ok(())
+                        Ok(Message::CapabilityResponse)
                     }
                     REPORT_FIRMWARE => {
                         let major = buf.get(2).with_context(|| MessageTooShortSnafu)?;
@@ -394,7 +425,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                                 .with_context(|_| Utf8Snafu)?
                                 .to_string();
                         }
-                        Ok(())
+                        Ok(Message::ReportFirmware)
                     }
                     I2C_REPLY => {
                         let len = buf.len();
@@ -419,7 +450,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                             i += 2;
                         }
                         self.i2c_data.push(reply);
-                        Ok(())
+                        Ok(Message::I2CReply)
                     }
                     _ => Err(Error::UnknownSysEx { code: buf[1] }),
                 }
