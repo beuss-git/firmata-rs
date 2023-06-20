@@ -1,11 +1,9 @@
 //! This module contains a client implementation of the
 //! [Firmata Protocol](https://github.com/firmata/protocol)
 
-use snafu::{ResultExt, Snafu};
-use std::io::{ErrorKind, Read, Write};
+use snafu::{OptionExt, ResultExt, Snafu};
+use std::io::{Read, Write};
 use std::str;
-use std::thread;
-use std::time::Duration;
 
 pub const ENCODER_DATA: u8 = 0x61;
 pub const ANALOG_MAPPING_QUERY: u8 = 0x69;
@@ -37,7 +35,9 @@ pub const PIN_MODE: u8 = 0xF4;
 pub const REPORT_DIGITAL: u8 = 0xD0;
 pub const REPORT_ANALOG: u8 = 0xC0;
 pub const DIGITAL_MESSAGE: u8 = 0x90;
+pub const DIGITAL_MESSAGE_BOUND: u8 = 0x9F;
 pub const ANALOG_MESSAGE: u8 = 0xE0;
+pub const ANALOG_MESSAGE_BOUND: u8 = 0xEF;
 
 pub const INPUT: u8 = 0;
 pub const OUTPUT: u8 = 1;
@@ -49,59 +49,33 @@ pub const ONEWIRE: u8 = 7;
 pub const STEPPER: u8 = 8;
 pub const ENCODER: u8 = 9;
 
-/// Firmata RS error type.
+/// Firmata error type.
 #[derive(Debug, Snafu)]
 pub enum Error {
     UnknownSysEx { code: u8 },
     BadByte { byte: u8 },
     StdIoError { source: std::io::Error },
     Utf8Error { source: std::str::Utf8Error },
+    MessageTooShort,
 }
 
-fn read<T: Read>(port: &mut T, len: i32) -> Result<Vec<u8>, Error> {
-    let mut vec: Vec<u8> = vec![];
-    let mut len = len;
-
-    loop {
-        let buf: &mut [u8; 1] = &mut [0u8];
-
-        match port.read(buf) {
-            Ok(_) => {
-                vec.push(buf[0]);
-                len -= 1;
-                if len == 0 {
-                    break;
-                }
-            }
-            Err(e) => {
-                if e.kind() == ErrorKind::TimedOut {
-                    thread::sleep(Duration::from_millis(1));
-                    continue;
-                }
-            }
-        }
-    }
-
-    Ok(vec)
-}
-
-/// A structure representing an I2C reply.
-#[derive(Debug)]
+/// An I2C reply.
+#[derive(Debug, Default)]
 pub struct I2CReply {
     pub address: i32,
     pub register: i32,
     pub data: Vec<u8>,
 }
 
-/// A structure representing an available pin mode.
-#[derive(Debug)]
+/// An available pin mode.
+#[derive(Debug, Default)]
 pub struct Mode {
     pub mode: u8,
     pub resolution: u8,
 }
 
-/// A structure representing the current state and configuration of a pin.
-#[derive(Debug)]
+/// The current state and configuration of a pin.
+#[derive(Debug, Default)]
 pub struct Pin {
     pub modes: Vec<Mode>,
     pub analog: bool,
@@ -109,7 +83,7 @@ pub struct Pin {
     pub mode: u8,
 }
 
-/// A trait for implementing Firmata boards.
+/// Firmata board functionality.
 pub trait Firmata {
     /// Get the raw I2C replies that have been read from the board.
     fn i2c_data(&mut self) -> &mut Vec<I2CReply>;
@@ -148,7 +122,7 @@ pub trait Firmata {
     fn read_and_decode(&mut self) -> Result<(), Error>;
 }
 
-/// A structure representing a Firmata board.
+/// A Firmata board representation.
 pub struct Board<T: Read + Write> {
     pub connection: Box<T>,
     pub pins: Vec<Pin>,
@@ -159,7 +133,7 @@ pub struct Board<T: Read + Write> {
 }
 
 impl<T: Read + Write> Board<T> {
-    /// Creates a new `Board` given an `Read+Write`.
+    /// Creates a new `Board` given a `Read+Write`.
     pub fn new(connection: Box<T>) -> Result<Board<T>, Error> {
         let mut b = Board {
             connection,
@@ -240,9 +214,9 @@ impl<T: Read + Write> Firmata for Board<T> {
                 START_SYSEX,
                 I2C_REQUEST,
                 address as u8,
-                (I2C_MODE_READ << 3),
-                ((size as u8) & 0x7F),
-                (((size) >> 7) & 0x7F) as u8,
+                I2C_MODE_READ << 3,
+                (size as u8) & SYSEX_REALTIME,
+                (size >> 7) as u8 & SYSEX_REALTIME,
                 END_SYSEX,
             ])
             .map(|_| ())
@@ -258,8 +232,8 @@ impl<T: Read + Write> Firmata for Board<T> {
         buf.push(I2C_MODE_WRITE << 3);
 
         for i in data.iter() {
-            buf.push(i & 0x7F);
-            buf.push((((*i as i32) >> 7) & 0x7F) as u8);
+            buf.push(i & SYSEX_REALTIME);
+            buf.push(((*i as i32) >> 7) as u8 & SYSEX_REALTIME);
         }
 
         buf.push(END_SYSEX);
@@ -290,8 +264,8 @@ impl<T: Read + Write> Firmata for Board<T> {
         self.connection
             .write(&mut [
                 ANALOG_MESSAGE | pin as u8,
-                (level & 0x7f) as u8,
-                ((level >> 7) & 0x7f) as u8,
+                level as u8 & SYSEX_REALTIME,
+                (level >> 7) as u8 & SYSEX_REALTIME,
             ])
             .map(|_| ())
             .with_context(|_| StdIoSnafu)
@@ -314,8 +288,8 @@ impl<T: Read + Write> Firmata for Board<T> {
         self.connection
             .write(&mut [
                 DIGITAL_MESSAGE | port as u8,
-                (value & 0x7f) as u8,
-                ((value >> 7) & 0x7f) as u8,
+                value as u8 & SYSEX_REALTIME,
+                (value >> 7) as u8 & SYSEX_REALTIME,
             ])
             .map(|_| ())
             .with_context(|_| StdIoSnafu)
@@ -330,28 +304,35 @@ impl<T: Read + Write> Firmata for Board<T> {
     }
 
     fn read_and_decode(&mut self) -> Result<(), Error> {
-        let mut buf = read(&mut self.connection, 3)?;
+        let mut buf = vec![0; 3];
+        self.connection
+            .read_exact(&mut buf)
+            .with_context(|_| StdIoSnafu)?;
         match buf[0] {
             PROTOCOL_VERSION => {
                 self.protocol_version = format!("{:o}.{:o}", buf[1], buf[2]);
                 Ok(())
             }
-            ANALOG_MESSAGE..=0xEF => {
+            ANALOG_MESSAGE..=ANALOG_MESSAGE_BOUND => {
+                if buf.len() < 3 {
+                    return Err(Error::MessageTooShort);
+                }
                 let value = (buf[1] as i32) | ((buf[2] as i32) << 7);
                 let pin = ((buf[0] as i32) & 0x0F) + 14;
-
                 if self.pins.len() as i32 > pin {
                     self.pins[pin as usize].value = value;
                 }
                 Ok(())
             }
-            DIGITAL_MESSAGE..=0x9F => {
+            DIGITAL_MESSAGE..=DIGITAL_MESSAGE_BOUND => {
+                if buf.len() < 3 {
+                    return Err(Error::MessageTooShort);
+                }
                 let port = (buf[0] as i32) & 0x0F;
                 let value = (buf[1] as i32) | ((buf[2] as i32) << 7);
 
                 for i in 0..8 {
                     let pin = (8 * port) + i;
-
                     if self.pins.len() as i32 > pin && self.pins[pin as usize].mode == INPUT {
                         self.pins[pin as usize].value = (value >> (i & 0x07)) & 0x01;
                     }
@@ -360,22 +341,27 @@ impl<T: Read + Write> Firmata for Board<T> {
             }
             START_SYSEX => {
                 loop {
-                    let message = read(&mut *self.connection, 1)?;
-                    buf.push(message[0]);
-                    if message[0] == END_SYSEX {
+                    // Read until END_SYSEX.
+                    let mut byte = [0];
+                    self.connection
+                        .read_exact(&mut byte)
+                        .with_context(|_| StdIoSnafu)?;
+                    buf.push(byte[0]);
+                    if byte[0] == END_SYSEX {
                         break;
                     }
                 }
                 match buf[1] {
+                    END_SYSEX => Ok(()),
                     ANALOG_MAPPING_RESPONSE => {
-                        if !self.pins.is_empty() {
-                            let mut i = 2;
-                            while i < buf.len() - 1 {
-                                if buf[i] != 127u8 {
-                                    self.pins[i - 2].analog = true;
-                                }
-                                i += 1;
+                        let mut i = 2;
+                        // Also break before pins indexing is out of bounds.
+                        let upper = (buf.len() - 1).min(self.pins.len() + 2);
+                        while i < upper {
+                            if buf[i] != 127u8 {
+                                self.pins[i - 2].analog = true;
                             }
+                            i += 1;
                         }
                         Ok(())
                     }
@@ -383,22 +369,12 @@ impl<T: Read + Write> Firmata for Board<T> {
                         let mut pin = 0;
                         let mut i = 2;
                         self.pins = vec![];
-                        self.pins.push(Pin {
-                            modes: vec![],
-                            analog: false,
-                            value: 0,
-                            mode: 0,
-                        });
+                        self.pins.push(Pin::default());
                         while i < buf.len() - 1 {
                             if buf[i] == 127u8 {
                                 pin += 1;
                                 i += 1;
-                                self.pins.push(Pin {
-                                    modes: vec![],
-                                    analog: false,
-                                    value: 0,
-                                    mode: 0,
-                                });
+                                self.pins.push(Pin::default());
                                 continue;
                             }
                             self.pins[pin].modes.push(Mode {
@@ -410,14 +386,21 @@ impl<T: Read + Write> Firmata for Board<T> {
                         Ok(())
                     }
                     REPORT_FIRMWARE => {
-                        self.firmware_version = format!("{:o}.{:o}", buf[2], buf[3]);
-                        self.firmware_name = str::from_utf8(&buf[4..buf.len() - 1])
-                            .with_context(|_| Utf8Snafu)?
-                            .to_string();
+                        let major = buf.get(2).with_context(|| MessageTooShortSnafu)?;
+                        let minor = buf.get(3).with_context(|| MessageTooShortSnafu)?;
+                        self.firmware_version = format!("{:o}.{:o}", major, minor);
+                        if 4 < buf.len() - 1 {
+                            self.firmware_name = str::from_utf8(&buf[4..buf.len() - 1])
+                                .with_context(|_| Utf8Snafu)?
+                                .to_string();
+                        }
                         Ok(())
                     }
                     I2C_REPLY => {
                         let len = buf.len();
+                        if len < 8 {
+                            return Err(Error::MessageTooShort);
+                        }
                         let mut reply = I2CReply {
                             address: (buf[2] as i32) | ((buf[3] as i32) << 7),
                             register: (buf[4] as i32) | ((buf[5] as i32) << 7),
