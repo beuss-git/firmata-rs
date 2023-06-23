@@ -1,6 +1,6 @@
 [package]
-name = "firmata"
-version = "0.2.0"
+name = "firmata-rs"
+version = "0.3.0"
 license = "MIT OR Apache-2.0"
 authors = ["Tiemen Schuijbroek <t.j.l.schuijbroek@ratio-case.nl>"]
 readme = "README.md"
@@ -9,8 +9,11 @@ homepage = "https://github.com/Tiemen/firmata-rs"
 description = "A Firmata protocol client library."
 edition = "2021"
 
+[dependencies]
+backoff = "~0.4"
+snafu = "~0.7"
+tracing = "0.1"
+
 [dev-dependencies]
 serialport = "~4"
-
-[dependencies]
-snafu = "~0.7"
+tracing-subscriber = "~0.3"

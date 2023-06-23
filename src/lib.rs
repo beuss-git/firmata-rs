@@ -3,8 +3,6 @@
 
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::io::{Read, Write};
-use std::str;
-use std::time::Duration;
 
 pub const ENCODER_DATA: u8 = 0x61;
 pub const ANALOG_MAPPING_QUERY: u8 = 0x69;
@@ -61,6 +59,16 @@ pub enum Error {
     AttemptsExceeded,
     TimeoutExceeded,
 }
+impl From<backoff::Error<Error>> for Error {
+    fn from(value: backoff::Error<Error>) -> Self {
+        match value {
+            backoff::Error::Permanent(err) => err,
+            backoff::Error::Transient { err, .. } => err,
+        }
+    }
+}
+/// Result type with Firmata Error.
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Received Firmata message
 #[derive(Clone, Debug)]
@@ -100,7 +108,7 @@ pub struct Pin {
 }
 
 /// Firmata board functionality.
-pub trait Firmata {
+pub trait Firmata: std::fmt::Debug {
     /// Get the raw I2C replies that have been read from the board.
     fn i2c_data(&mut self) -> &mut Vec<I2CReply>;
     /// Get pins that the board has access to.
@@ -112,59 +120,160 @@ pub trait Firmata {
     /// Get the firmware version.
     fn firmware_version(&mut self) -> &String;
     /// Query the board for available analog pins.
-    fn query_analog_mapping(&mut self) -> Result<(), Error>;
+    fn query_analog_mapping(&mut self) -> Result<()>;
     /// Query the board for all available capabilities.
-    fn query_capabilities(&mut self) -> Result<(), Error>;
+    fn query_capabilities(&mut self) -> Result<()>;
     /// Query the board for current firmware and protocol information.
-    fn query_firmware(&mut self) -> Result<(), Error>;
+    fn query_firmware(&mut self) -> Result<()>;
     /// Configure the `delay` in microseconds for I2C devices that require a delay between when the
     /// register is written to and the data in that register can be read.
-    fn i2c_config(&mut self, delay: i32) -> Result<(), Error>;
+    fn i2c_config(&mut self, delay: i32) -> Result<()>;
     /// Read `size` bytes from I2C device at the specified `address`.
-    fn i2c_read(&mut self, address: i32, size: i32) -> Result<(), Error>;
+    fn i2c_read(&mut self, address: i32, size: i32) -> Result<()>;
     /// Write `data` to the I2C device at the specified `address`.
-    fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<(), Error>;
+    fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()>;
     /// Set the digital reporting `state` of the specified `pin`.
-    fn report_digital(&mut self, pin: i32, state: i32) -> Result<(), Error>;
+    fn report_digital(&mut self, pin: i32, state: i32) -> Result<()>;
     /// Set the analog reporting `state` of the specified `pin`.
-    fn report_analog(&mut self, pin: i32, state: i32) -> Result<(), Error>;
+    fn report_analog(&mut self, pin: i32, state: i32) -> Result<()>;
     /// Write `level` to the analog `pin`.
-    fn analog_write(&mut self, pin: i32, level: i32) -> Result<(), Error>;
+    fn analog_write(&mut self, pin: i32, level: i32) -> Result<()>;
     /// Write `level` to the digital `pin`.
-    fn digital_write(&mut self, pin: i32, level: i32) -> Result<(), Error>;
+    fn digital_write(&mut self, pin: i32, level: i32) -> Result<()>;
     /// Set the `mode` of the specified `pin`.
-    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<(), Error>;
+    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()>;
     /// Read from the Firmata device, parse one Firmata message and return its type.
-    fn read_and_decode(&mut self) -> Result<Message, Error>;
-    /// Read messages until one with the given SysEx passes.
-    fn read_and_decode_backoff(&mut self, back_off: BackOff) -> Result<(), Error>;
+    fn read_and_decode(&mut self) -> Result<Message>;
 }
 
-/// Back-off instructions.
-#[derive(Debug, Default)]
-pub struct BackOff {
-    /// Message to look out for. Retry with another attempt if it doesn't match.
-    pub message: Option<Message>,
-    /// Timeout duration.
-    pub timeout: Option<Duration>,
-    /// Maximum number of attempts.
-    pub attempts: Option<usize>,
+/// Firmata board functionality that retries and fallible methods.
+pub trait RetryFirmata: Firmata {
+    /// Backoff strategy.
+    fn backoff(&self) -> backoff::ExponentialBackoff {
+        backoff::ExponentialBackoff::default()
+    }
+    /// Write `level` to the analog `pin`.
+    fn retry_analog_write(&mut self, pin: i32, level: i32) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.analog_write(pin, level)
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Write `level` to the digital `pin`.
+    fn retry_digital_write(&mut self, pin: i32, level: i32) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.digital_write(pin, level)
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Configure the `delay` in microseconds for I2C devices that require a delay between when the
+    /// register is written to and the data in that register can be read.
+    fn retry_i2c_config(&mut self, delay: i32) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.i2c_config(delay).map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Read `size` bytes from I2C device at the specified `address`.
+    fn retry_i2c_read(&mut self, address: i32, size: i32) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.i2c_read(address, size)
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Write `data` to the I2C device at the specified `address`.
+    fn retry_i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.i2c_write(address, data)
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Query the board for available analog pins.
+
+    fn retry_query_analog_mapping(&mut self) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.query_analog_mapping()
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Query the board for all available capabilities.
+    fn retry_query_capabilities(&mut self) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.query_capabilities().map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Query the board for current firmware and protocol information.
+    fn retry_query_firmware(&mut self) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.query_firmware().map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Read from the Firmata device, parse one Firmata message and return its type.
+    fn retry_read_and_decode(&mut self) -> Result<Message> {
+        backoff::retry(self.backoff(), || {
+            self.read_and_decode().map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Set the analog reporting `state` of the specified `pin`.
+    fn retry_report_analog(&mut self, pin: i32, state: i32) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.report_analog(pin, state)
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Set the digital reporting `state` of the specified `pin`.
+    fn retry_report_digital(&mut self, pin: i32, state: i32) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.report_digital(pin, state)
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
+    /// Set the `mode` of the specified `pin`.
+    fn retry_set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()> {
+        backoff::retry(self.backoff(), || {
+            self.set_pin_mode(pin, mode)
+                .map_err(backoff::Error::transient)
+        })
+        .map_err(|e| e.into())
+    }
 }
+
+impl<T> RetryFirmata for T where T: Firmata {}
 
 /// A Firmata board representation.
-pub struct Board<T: Read + Write> {
+#[derive(Debug)]
+pub struct Board<T: Read + Write + std::fmt::Debug> {
     pub connection: Box<T>,
     pub pins: Vec<Pin>,
     pub i2c_data: Vec<I2CReply>,
     pub protocol_version: String,
     pub firmware_name: String,
     pub firmware_version: String,
-    pub back_off: BackOff,
+}
+impl<T: Read + Write + std::fmt::Debug> std::fmt::Display for Board<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Board {{ firmware={}, version={}, protocol={}, connection={:?} }}",
+            self.firmware_name, self.firmware_version, self.protocol_version, self.connection
+        )
+    }
 }
 
-impl<T: Read + Write> Board<T> {
+impl<T: Read + Write + std::fmt::Debug> Board<T> {
     /// Creates a new `Board` given a `Read+Write`.
-    pub fn new(connection: Box<T>, back_off: BackOff) -> Result<Board<T>, Error> {
+    #[tracing::instrument(err, ret(Display))]
+    pub fn new(connection: Box<T>) -> Result<Board<T>> {
         let mut b = Board {
             connection,
             firmware_name: String::new(),
@@ -172,24 +281,21 @@ impl<T: Read + Write> Board<T> {
             protocol_version: String::new(),
             pins: vec![],
             i2c_data: vec![],
-            back_off,
         };
-
-        b.query_firmware()?;
-        b.read_and_decode()?;
-        b.read_and_decode()?;
-        b.query_capabilities()?;
-        b.read_and_decode()?;
-        b.query_analog_mapping()?;
-        b.read_and_decode()?;
-        b.report_digital(0, 1)?;
-        b.report_digital(1, 1)?;
-
+        b.retry_query_firmware()?;
+        b.retry_read_and_decode()?;
+        b.retry_read_and_decode()?;
+        b.retry_query_capabilities()?;
+        b.retry_read_and_decode()?;
+        b.retry_query_analog_mapping()?;
+        b.retry_read_and_decode()?;
+        b.retry_report_digital(0, 1)?;
+        b.retry_report_digital(1, 1)?;
         Ok(b)
     }
 }
 
-impl<T: Read + Write> Firmata for Board<T> {
+impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
     fn pins(&mut self) -> &Vec<Pin> {
         &self.pins
     }
@@ -205,28 +311,33 @@ impl<T: Read + Write> Firmata for Board<T> {
     fn i2c_data(&mut self) -> &mut Vec<I2CReply> {
         &mut self.i2c_data
     }
-    fn query_analog_mapping(&mut self) -> Result<(), Error> {
+
+    #[tracing::instrument(skip(self), err)]
+    fn query_analog_mapping(&mut self) -> Result<()> {
         self.connection
             .write(&mut [START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
             .map(|_| ())
             .with_context(|_| StdIoSnafu)
     }
 
-    fn query_capabilities(&mut self) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn query_capabilities(&mut self) -> Result<()> {
         self.connection
             .write(&mut [START_SYSEX, CAPABILITY_QUERY, END_SYSEX])
             .map(|_| ())
             .with_context(|_| StdIoSnafu)
     }
 
-    fn query_firmware(&mut self) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn query_firmware(&mut self) -> Result<()> {
         self.connection
             .write(&mut [START_SYSEX, REPORT_FIRMWARE, END_SYSEX])
             .map(|_| ())
             .with_context(|_| StdIoSnafu)
     }
 
-    fn i2c_config(&mut self, delay: i32) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn i2c_config(&mut self, delay: i32) -> Result<()> {
         self.connection
             .write(&mut [
                 START_SYSEX,
@@ -239,7 +350,8 @@ impl<T: Read + Write> Firmata for Board<T> {
             .with_context(|_| StdIoSnafu)
     }
 
-    fn i2c_read(&mut self, address: i32, size: i32) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn i2c_read(&mut self, address: i32, size: i32) -> Result<()> {
         self.connection
             .write(&mut [
                 START_SYSEX,
@@ -254,7 +366,8 @@ impl<T: Read + Write> Firmata for Board<T> {
             .with_context(|_| StdIoSnafu)
     }
 
-    fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()> {
         let mut buf = vec![];
 
         buf.push(START_SYSEX);
@@ -275,21 +388,24 @@ impl<T: Read + Write> Firmata for Board<T> {
             .with_context(|_| StdIoSnafu)
     }
 
-    fn report_digital(&mut self, pin: i32, state: i32) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn report_digital(&mut self, pin: i32, state: i32) -> Result<()> {
         self.connection
             .write(&mut [REPORT_DIGITAL | pin as u8, state as u8])
             .map(|_| ())
             .with_context(|_| StdIoSnafu)
     }
 
-    fn report_analog(&mut self, pin: i32, state: i32) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn report_analog(&mut self, pin: i32, state: i32) -> Result<()> {
         self.connection
             .write(&mut [REPORT_ANALOG | pin as u8, state as u8])
             .map(|_| ())
             .with_context(|_| StdIoSnafu)
     }
 
-    fn analog_write(&mut self, pin: i32, level: i32) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn analog_write(&mut self, pin: i32, level: i32) -> Result<()> {
         self.pins[pin as usize].value = level;
 
         self.connection
@@ -302,7 +418,8 @@ impl<T: Read + Write> Firmata for Board<T> {
             .with_context(|_| StdIoSnafu)
     }
 
-    fn digital_write(&mut self, pin: i32, level: i32) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn digital_write(&mut self, pin: i32, level: i32) -> Result<()> {
         let port = (pin as f64 / 8f64).floor() as usize;
         let mut value = 0i32;
         let mut i = 0;
@@ -326,7 +443,8 @@ impl<T: Read + Write> Firmata for Board<T> {
             .with_context(|_| StdIoSnafu)
     }
 
-    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<(), Error> {
+    #[tracing::instrument(skip(self), err)]
+    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()> {
         self.pins[pin as usize].mode = mode;
         self.connection
             .write(&mut [PIN_MODE, pin as u8, mode])
@@ -334,7 +452,8 @@ impl<T: Read + Write> Firmata for Board<T> {
             .with_context(|_| StdIoSnafu)
     }
 
-    fn read_and_decode(&mut self) -> Result<Message, Error> {
+    #[tracing::instrument(skip(self), err, ret)]
+    fn read_and_decode(&mut self) -> Result<Message> {
         let mut buf = vec![0; 3];
         self.connection
             .read_exact(&mut buf)
@@ -421,7 +540,7 @@ impl<T: Read + Write> Firmata for Board<T> {
                         let minor = buf.get(3).with_context(|| MessageTooShortSnafu)?;
                         self.firmware_version = format!("{:o}.{:o}", major, minor);
                         if 4 < buf.len() - 1 {
-                            self.firmware_name = str::from_utf8(&buf[4..buf.len() - 1])
+                            self.firmware_name = std::str::from_utf8(&buf[4..buf.len() - 1])
                                 .with_context(|_| Utf8Snafu)?
                                 .to_string();
                         }

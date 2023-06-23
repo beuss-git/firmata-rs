@@ -1,31 +1,18 @@
-#rust-firmata
+# Firmata client library in Rust
 
-Control your [firmata](https://github.com/firmata/protocol) powered device with rust!
+Control your [Firmata](https://github.com/firmata/protocol) devices from Rust!
 
-Getting Started
----
-```bash
-$ git clone https://github.com/zankich/rust-firmata && cd rust-firmata
-$ cargo build
-$ cargo run --example blink
-```
-Usage
----
-Add `firmata` to  your `Cargo.toml`
-```
-[dependencies]
-firmata = "0.2.0"
-```
+The library comes with a Board struct, which you can initialize with any object that implements
+`std:io::{Read, Write}`. This avoids being locked in to a specific interface library. I highly
+recommend `serialport` for your USB connections (used in examples), but feel free to use `serial` or
+any other.
 
-What works
----
-- I2C
-- Pwm 
-- Servo
-- Analog
-- Digital
+The different methods of the `Firmata` trait that return results also have _backoff-able_
+counterparts in the `RetryFirmata` trait that utilizes a `ExponentialBackoff` strategy powered by
+the `backoff` crate. This may be useful as your Rust program may run "too fast" for your Arduino
+device to keep up.
 
-## License
-Copyright (c) 2015 Adrian  Zankich
+## Acknowledgements
 
-Distributed under the [MIT License](LICENSE).
+Original code for this library was written by Adrian Zankich, but most methods have been re-written
+into infallible (no panic) code.

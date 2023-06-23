@@ -1,8 +1,10 @@
-use firmata::*;
+use firmata_rs::*;
 use serialport::*;
 use std::{thread, time::Duration};
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let port = serialport::new("/dev/ttyACM0", 57_600)
         .data_bits(DataBits::Eight)
         .parity(Parity::None)
@@ -12,20 +14,19 @@ fn main() {
         .open()
         .expect("an opened serial port");
 
-    let mut b = firmata::Board::new(Box::new(port)).expect("an initialized board");
+    let mut b = firmata_rs::Board::new(Box::new(port)).expect("new board");
 
     let pin = 3;
 
-    println!("firmware version {}", b.firmware_version());
-    println!("firmware name {}", b.firmware_name());
-    println!("protocol version {}", b.protocol_version());
+    b.retry_set_pin_mode(pin, firmata_rs::SERVO)
+        .expect("pin mode set");
 
-    b.set_pin_mode(pin, firmata::SERVO).expect("pin mode set");
+    tracing::info!("Starting loop...");
 
     loop {
         for value in 0..180 {
-            b.analog_write(pin, value).expect("analog write");
-            println!("{}", value);
+            b.retry_analog_write(pin, value).expect("analog write");
+            tracing::info!("{}", value);
             thread::sleep(Duration::from_millis(10));
         }
     }
