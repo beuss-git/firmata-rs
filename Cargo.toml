@@ -1,6 +1,6 @@
 [package]
 name = "firmata-rs"
-version = "0.3.0"
+version = "0.4.0"
 license = "MIT OR Apache-2.0"
 authors = ["Tiemen Schuijbroek <t.j.l.schuijbroek@ratio-case.nl>"]
 readme = "README.md"

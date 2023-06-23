@@ -1,0 +1,63 @@
+image: registry.gitlab.com/ratio-case-os/docker/rust-ci
+
+variables:
+  FLAMES: ""
+
+stages:
+  - test
+  - deploy
+
+rust-lint:
+  stage: test
+  script:
+    - rust-ci lint-lib
+
+# python-lint:
+#   stage: test
+#   script:
+#     - rust-ci lint-python
+
+# rust-coverage:
+#   stage: test
+#   script:
+#     - rust-ci test-lib-coverage
+#   coverage: '/^\s*(\d+(?:\.\d+)?%)\s*coverage.*$/'
+#   artifacts:
+#     reports:
+#       coverage_report:
+#         coverage_format: cobertura
+#         path: target/tarpaulin/cobertura.xml
+
+# rust-flamegraph:
+#   stage: test
+#   only:
+#     variables:
+#       - "$FLAMES"
+#   script:
+#     - rust-ci flamegraph
+#   artifacts:
+#     paths:
+#       - target/flames/
+
+# python-test:
+#   stage: test
+#   script:
+#     - rust-ci test-python
+
+rust-deploy:
+  stage: deploy
+  only:
+    refs:
+      - main
+  script:
+    - rust-ci publish-lib
+  allow_failure: true
+
+# python-deploy:
+#   stage: deploy
+#   only:
+#     refs:
+#       - main
+#   script:
+#     - rust-ci publish-python
+#   allow_failure: true
