@@ -414,12 +414,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
 
     #[tracing::instrument(skip(self), err, ret)]
     fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()> {
-        let mut buf = vec![];
-
-        buf.push(START_SYSEX);
-        buf.push(I2C_REQUEST);
-        buf.push(address as u8);
-        buf.push(I2C_MODE_WRITE << 3);
+        let mut buf = vec![START_SYSEX, I2C_REQUEST, address as u8, I2C_MODE_WRITE << 3];
 
         for i in data.iter() {
             buf.push(i & SYSEX_REALTIME);
@@ -428,7 +423,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
 
         buf.push(END_SYSEX);
 
-        self.write(&mut buf[..])
+        self.write(&buf)
     }
 
     #[tracing::instrument(skip(self), err, ret)]
