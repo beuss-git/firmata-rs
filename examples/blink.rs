@@ -23,7 +23,6 @@ fn main() {
 
     loop {
         thread::sleep(Duration::from_millis(400));
-        tracing::info!("{}", i);
         b.retry_digital_write(13, i).expect("digital write");
         i ^= 1;
     }

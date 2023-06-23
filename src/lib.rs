@@ -1,5 +1,56 @@
-//! This module contains a client implementation of the
-//! [Firmata Protocol](https://github.com/firmata/protocol)
+//! # Firmata client library in Rust
+//!
+//! Control your [Firmata](https://github.com/firmata/protocol) devices from Rust!
+//!
+//! The library comes with a Board struct, which you can initialize with any object that implements
+//! `std:io::{Read, Write}` and `Debug` for formatting purposes. This avoids being locked in to a
+//! specific interface library. I highly recommend [`serialport`] for your USB connections (used in
+//! examples), but feel free to use [`serial`] or any other.
+//!
+//! The different methods of the [`Firmata`] trait that return results also have _backoff-able_
+//! counterparts in the [`RetryFirmata`] trait that utilizes a [`backoff::ExponentialBackoff`]
+//! strategy powered by the [`backoff`] crate. This may be useful as your Rust program may run "too
+//! fast" for your Firmata device to keep up.
+//!
+//! The crate has been set up to utilize [`tracing`], which helps in finding where your messages
+//! went! If you set the environment variable `CARGO_LOG=DEBUG` you can capture the most noise.
+//!
+//! ## Examples
+//!
+//! There are quite a couple of examples to try with your Firmata device! You can run each of them
+//! like this:
+//!
+//! ```bash
+//! cargo run --example blink
+//! ```
+//!
+//! Where `blink` is the example's filename.
+//!
+//! If you want the "full" output you can use:
+//!
+//! ```bash
+//! RUST_LOG=DEBUG cargo run --example blink
+//! ```
+//!
+//! ## Installing Firmata on a device
+//!
+//! Chances are you have an Arduino or other Firmata device lying around since you're here :). You
+//! can go to your favorite Arduino IDE of choice and load the regular "StandardFirmata" onto your
+//! device and start tinkering!
+//!
+//! ## Finding the right port
+//!
+//! You might need to set the USB port to the one that is in use on your machine. Find the right
+//! `port_name` in the list after running:
+//!
+//! ```bash
+//! cargo run --example available
+//! ```
+//!
+//! ## Acknowledgements
+//!
+//! This library is largely based on the earlier work by Adrian Zankich over at
+//! https://github.com/zankich/rust-firmata to whom should go out many thanks!
 
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::io::{Read, Write};
@@ -109,41 +160,41 @@ pub struct Pin {
 
 /// Firmata board functionality.
 pub trait Firmata: std::fmt::Debug {
-    /// Get the raw I2C replies that have been read from the board.
-    fn i2c_data(&mut self) -> &mut Vec<I2CReply>;
-    /// Get pins that the board has access to.
-    fn pins(&mut self) -> &Vec<Pin>;
-    /// Get the current Firmata protocol version.
-    fn protocol_version(&mut self) -> &String;
+    /// Write `level` to the analog `pin`.
+    fn analog_write(&mut self, pin: i32, level: i32) -> Result<()>;
+    /// Write `level` to the digital `pin`.
+    fn digital_write(&mut self, pin: i32, level: i32) -> Result<()>;
     /// Get the firmware name.
     fn firmware_name(&mut self) -> &String;
     /// Get the firmware version.
     fn firmware_version(&mut self) -> &String;
+    /// Configure the `delay` in microseconds for I2C devices that require a delay between when the
+    /// register is written to and the data in that register can be read.
+    fn i2c_config(&mut self, delay: i32) -> Result<()>;
+    /// Get the raw I2C replies that have been read from the board.
+    fn i2c_data(&mut self) -> &mut Vec<I2CReply>;
+    /// Read `size` bytes from I2C device at the specified `address`.
+    fn i2c_read(&mut self, address: i32, size: i32) -> Result<()>;
+    /// Write `data` to the I2C device at the specified `address`.
+    fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()>;
+    /// Get pins that the board has access to.
+    fn pins(&mut self) -> &Vec<Pin>;
+    /// Get the current Firmata protocol version.
+    fn protocol_version(&mut self) -> &String;
     /// Query the board for available analog pins.
     fn query_analog_mapping(&mut self) -> Result<()>;
     /// Query the board for all available capabilities.
     fn query_capabilities(&mut self) -> Result<()>;
     /// Query the board for current firmware and protocol information.
     fn query_firmware(&mut self) -> Result<()>;
-    /// Configure the `delay` in microseconds for I2C devices that require a delay between when the
-    /// register is written to and the data in that register can be read.
-    fn i2c_config(&mut self, delay: i32) -> Result<()>;
-    /// Read `size` bytes from I2C device at the specified `address`.
-    fn i2c_read(&mut self, address: i32, size: i32) -> Result<()>;
-    /// Write `data` to the I2C device at the specified `address`.
-    fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()>;
-    /// Set the digital reporting `state` of the specified `pin`.
-    fn report_digital(&mut self, pin: i32, state: i32) -> Result<()>;
-    /// Set the analog reporting `state` of the specified `pin`.
-    fn report_analog(&mut self, pin: i32, state: i32) -> Result<()>;
-    /// Write `level` to the analog `pin`.
-    fn analog_write(&mut self, pin: i32, level: i32) -> Result<()>;
-    /// Write `level` to the digital `pin`.
-    fn digital_write(&mut self, pin: i32, level: i32) -> Result<()>;
-    /// Set the `mode` of the specified `pin`.
-    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()>;
     /// Read from the Firmata device, parse one Firmata message and return its type.
     fn read_and_decode(&mut self) -> Result<Message>;
+    /// Set the analog reporting `state` of the specified `pin`.
+    fn report_analog(&mut self, pin: i32, state: i32) -> Result<()>;
+    /// Set the digital reporting `state` of the specified `pin`.
+    fn report_digital(&mut self, pin: i32, state: i32) -> Result<()>;
+    /// Set the `mode` of the specified `pin`.
+    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()>;
 }
 
 /// Firmata board functionality that retries and fallible methods.
@@ -269,6 +320,16 @@ impl<T: Read + Write + std::fmt::Debug> std::fmt::Display for Board<T> {
         )
     }
 }
+impl<T: Read + Write + std::fmt::Debug> Board<T> {
+    /// Write on the internal connection.
+    #[tracing::instrument(skip(self), err, ret, level = "debug")]
+    fn write(&mut self, buf: &[u8]) -> Result<()> {
+        self.connection
+            .write(buf)
+            .map(|_| ())
+            .with_context(|_| StdIoSnafu)
+    }
+}
 
 impl<T: Read + Write + std::fmt::Debug> Board<T> {
     /// Creates a new `Board` given a `Read+Write`.
@@ -312,61 +373,46 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
         &mut self.i2c_data
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn query_analog_mapping(&mut self) -> Result<()> {
-        self.connection
-            .write(&mut [START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn query_capabilities(&mut self) -> Result<()> {
-        self.connection
-            .write(&mut [START_SYSEX, CAPABILITY_QUERY, END_SYSEX])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[START_SYSEX, CAPABILITY_QUERY, END_SYSEX])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn query_firmware(&mut self) -> Result<()> {
-        self.connection
-            .write(&mut [START_SYSEX, REPORT_FIRMWARE, END_SYSEX])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[START_SYSEX, REPORT_FIRMWARE, END_SYSEX])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn i2c_config(&mut self, delay: i32) -> Result<()> {
-        self.connection
-            .write(&mut [
-                START_SYSEX,
-                I2C_CONFIG,
-                (delay & 0xFF) as u8,
-                (delay >> 8 & 0xFF) as u8,
-                END_SYSEX,
-            ])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[
+            START_SYSEX,
+            I2C_CONFIG,
+            (delay & 0xFF) as u8,
+            (delay >> 8 & 0xFF) as u8,
+            END_SYSEX,
+        ])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn i2c_read(&mut self, address: i32, size: i32) -> Result<()> {
-        self.connection
-            .write(&mut [
-                START_SYSEX,
-                I2C_REQUEST,
-                address as u8,
-                I2C_MODE_READ << 3,
-                (size as u8) & SYSEX_REALTIME,
-                (size >> 7) as u8 & SYSEX_REALTIME,
-                END_SYSEX,
-            ])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[
+            START_SYSEX,
+            I2C_REQUEST,
+            address as u8,
+            I2C_MODE_READ << 3,
+            (size as u8) & SYSEX_REALTIME,
+            (size >> 7) as u8 & SYSEX_REALTIME,
+            END_SYSEX,
+        ])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()> {
         let mut buf = vec![];
 
@@ -382,43 +428,30 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
 
         buf.push(END_SYSEX);
 
-        self.connection
-            .write(&mut buf[..])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&mut buf[..])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn report_digital(&mut self, pin: i32, state: i32) -> Result<()> {
-        self.connection
-            .write(&mut [REPORT_DIGITAL | pin as u8, state as u8])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[REPORT_DIGITAL | pin as u8, state as u8])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn report_analog(&mut self, pin: i32, state: i32) -> Result<()> {
-        self.connection
-            .write(&mut [REPORT_ANALOG | pin as u8, state as u8])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[REPORT_ANALOG | pin as u8, state as u8])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn analog_write(&mut self, pin: i32, level: i32) -> Result<()> {
         self.pins[pin as usize].value = level;
-
-        self.connection
-            .write(&mut [
-                ANALOG_MESSAGE | pin as u8,
-                level as u8 & SYSEX_REALTIME,
-                (level >> 7) as u8 & SYSEX_REALTIME,
-            ])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[
+            ANALOG_MESSAGE | pin as u8,
+            level as u8 & SYSEX_REALTIME,
+            (level >> 7) as u8 & SYSEX_REALTIME,
+        ])
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err, ret)]
     fn digital_write(&mut self, pin: i32, level: i32) -> Result<()> {
         let port = (pin as f64 / 8f64).floor() as usize;
         let mut value = 0i32;
@@ -433,26 +466,20 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
             i += 1;
         }
 
-        self.connection
-            .write(&mut [
-                DIGITAL_MESSAGE | port as u8,
-                value as u8 & SYSEX_REALTIME,
-                (value >> 7) as u8 & SYSEX_REALTIME,
-            ])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
-    }
-
-    #[tracing::instrument(skip(self), err)]
-    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()> {
-        self.pins[pin as usize].mode = mode;
-        self.connection
-            .write(&mut [PIN_MODE, pin as u8, mode])
-            .map(|_| ())
-            .with_context(|_| StdIoSnafu)
+        self.write(&[
+            DIGITAL_MESSAGE | port as u8,
+            value as u8 & SYSEX_REALTIME,
+            (value >> 7) as u8 & SYSEX_REALTIME,
+        ])
     }
 
     #[tracing::instrument(skip(self), err, ret)]
+    fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()> {
+        self.pins[pin as usize].mode = mode;
+        self.write(&[PIN_MODE, pin as u8, mode])
+    }
+
+    #[tracing::instrument(skip(self), err, ret, level = "debug")]
     fn read_and_decode(&mut self) -> Result<Message> {
         let mut buf = vec![0; 3];
         self.connection
