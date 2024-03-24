@@ -54,6 +54,7 @@
 
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::io::{Read, Write};
+use std::time::Duration;
 
 pub const ENCODER_DATA: u8 = 0x61;
 pub const ANALOG_MAPPING_QUERY: u8 = 0x69;
@@ -201,7 +202,10 @@ pub trait Firmata: std::fmt::Debug {
 pub trait RetryFirmata: Firmata {
     /// Backoff strategy.
     fn backoff(&self) -> backoff::ExponentialBackoff {
-        backoff::ExponentialBackoff::default()
+        backoff::ExponentialBackoff {
+            max_interval: Duration::from_millis(5_000),
+            ..Default::default()
+        }
     }
     /// Write `level` to the analog `pin`.
     fn retry_analog_write(&mut self, pin: i32, level: i32) -> Result<()> {
@@ -244,7 +248,6 @@ pub trait RetryFirmata: Firmata {
         .map_err(|e| e.into())
     }
     /// Query the board for available analog pins.
-
     fn retry_query_analog_mapping(&mut self) -> Result<()> {
         backoff::retry(self.backoff(), || {
             self.query_analog_mapping()
