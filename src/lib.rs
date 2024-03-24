@@ -103,13 +103,16 @@ pub const ENCODER: u8 = 9;
 /// Firmata error type.
 #[derive(Debug, Snafu)]
 pub enum Error {
+    /// Unknown SysEx code: {code}
     UnknownSysEx { code: u8 },
+    /// Received a bad byte: {byte}
     BadByte { byte: u8 },
+    /// I/O error: {source}
     StdIoError { source: std::io::Error },
+    /// UTF8 error: {source}
     Utf8Error { source: std::str::Utf8Error },
+    /// Message was too short.
     MessageTooShort,
-    AttemptsExceeded,
-    TimeoutExceeded,
 }
 impl From<backoff::Error<Error>> for Error {
     fn from(value: backoff::Error<Error>) -> Self {
@@ -325,7 +328,7 @@ impl<T: Read + Write + std::fmt::Debug> std::fmt::Display for Board<T> {
 }
 impl<T: Read + Write + std::fmt::Debug> Board<T> {
     /// Write on the internal connection.
-    #[tracing::instrument(skip(self), err, ret, level = "debug")]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn write(&mut self, buf: &[u8]) -> Result<()> {
         self.connection
             .write(buf)
@@ -347,7 +350,6 @@ impl<T: Read + Write + std::fmt::Debug> Board<T> {
             i2c_data: vec![],
         };
         b.retry_query_firmware()?;
-        b.retry_read_and_decode()?;
         b.retry_read_and_decode()?;
         b.retry_query_capabilities()?;
         b.retry_read_and_decode()?;
@@ -376,22 +378,22 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
         &mut self.i2c_data
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn query_analog_mapping(&mut self) -> Result<()> {
         self.write(&[START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn query_capabilities(&mut self) -> Result<()> {
         self.write(&[START_SYSEX, CAPABILITY_QUERY, END_SYSEX])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn query_firmware(&mut self) -> Result<()> {
         self.write(&[START_SYSEX, REPORT_FIRMWARE, END_SYSEX])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn i2c_config(&mut self, delay: i32) -> Result<()> {
         self.write(&[
             START_SYSEX,
@@ -402,7 +404,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
         ])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn i2c_read(&mut self, address: i32, size: i32) -> Result<()> {
         self.write(&[
             START_SYSEX,
@@ -415,7 +417,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
         ])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()> {
         let mut buf = vec![START_SYSEX, I2C_REQUEST, address as u8, I2C_MODE_WRITE << 3];
 
@@ -429,17 +431,17 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
         self.write(&buf)
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn report_digital(&mut self, pin: i32, state: i32) -> Result<()> {
         self.write(&[REPORT_DIGITAL | pin as u8, state as u8])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn report_analog(&mut self, pin: i32, state: i32) -> Result<()> {
         self.write(&[REPORT_ANALOG | pin as u8, state as u8])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn analog_write(&mut self, pin: i32, level: i32) -> Result<()> {
         self.pins[pin as usize].value = level;
         self.write(&[
@@ -449,7 +451,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
         ])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn digital_write(&mut self, pin: i32, level: i32) -> Result<()> {
         let port = (pin as f64 / 8f64).floor() as usize;
         let mut value = 0i32;
@@ -471,13 +473,13 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
         ])
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()> {
         self.pins[pin as usize].mode = mode;
         self.write(&[PIN_MODE, pin as u8, mode])
     }
 
-    #[tracing::instrument(skip(self), err, ret, level = "debug")]
+    #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn read_and_decode(&mut self) -> Result<Message> {
         let mut buf = vec![0; 3];
         self.connection
