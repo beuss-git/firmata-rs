@@ -3,6 +3,11 @@
 Changelog following the template from https://keepachangelog.com.
 All versions before 1.X.X can contain major changes.
 
+## [0.4.3] - 2024-03-24
+
+- Fixed a board startup error.
+- Set most reporting to debug by default.
+
 ## [0.4.2] - 2024-03-24
 
 - Updated dependencies
