@@ -18,7 +18,7 @@ fn main() {
 
     let pin = 14; // A0
 
-    b.set_pin_mode(pin, firmata_rs::ANALOG)
+    b.set_pin_mode(pin, firmata_rs::PIN_MODE_ANALOG)
         .expect("pin mode set");
 
     b.report_analog(pin, 1).expect("reporting state");

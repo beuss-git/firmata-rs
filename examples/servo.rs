@@ -18,7 +18,7 @@ fn main() {
 
     let pin = 3;
 
-    b.retry_set_pin_mode(pin, firmata_rs::SERVO)
+    b.retry_set_pin_mode(pin, firmata_rs::PIN_MODE_SERVO)
         .expect("pin mode set");
 
     tracing::info!("Starting loop...");

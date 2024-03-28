@@ -18,7 +18,8 @@ fn main() {
 
     let pin = 3;
 
-    b.retry_set_pin_mode(pin, firmata_rs::PWM).expect("pin set");
+    b.retry_set_pin_mode(pin, firmata_rs::PIN_MODE_PWM)
+        .expect("pin set");
     b.retry_analog_write(pin, 0).expect("pin write");
 
     tracing::info!("Starting loop...");

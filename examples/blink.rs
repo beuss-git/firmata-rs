@@ -16,7 +16,7 @@ fn main() {
 
     let mut b = firmata_rs::Board::new(Box::new(port)).expect("new board");
 
-    b.retry_set_pin_mode(13, firmata_rs::OUTPUT)
+    b.retry_set_pin_mode(13, firmata_rs::PIN_MODE_OUTPUT)
         .expect("pin mode set");
 
     let mut i = 0;

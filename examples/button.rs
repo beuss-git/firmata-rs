@@ -19,9 +19,9 @@ fn main() {
     let led = 13;
     let button = 2;
 
-    b.retry_set_pin_mode(led, firmata_rs::OUTPUT)
+    b.retry_set_pin_mode(led, firmata_rs::PIN_MODE_OUTPUT)
         .expect("pin mode set");
-    b.retry_set_pin_mode(button, firmata_rs::INPUT)
+    b.retry_set_pin_mode(button, firmata_rs::PIN_MODE_INPUT)
         .expect("pin mode set");
 
     b.retry_report_digital(button, 1)

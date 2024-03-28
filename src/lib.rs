@@ -52,53 +52,11 @@
 //! This library is largely based on the earlier work by Adrian Zankich over at
 //! https://github.com/zankich/rust-firmata to whom should go out many thanks!
 
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::prelude::*;
 use std::io::{Read, Write};
 use std::time::Duration;
-
-pub const ENCODER_DATA: u8 = 0x61;
-pub const ANALOG_MAPPING_QUERY: u8 = 0x69;
-pub const ANALOG_MAPPING_RESPONSE: u8 = 0x6A;
-pub const CAPABILITY_QUERY: u8 = 0x6B;
-pub const CAPABILITY_RESPONSE: u8 = 0x6C;
-pub const PIN_STATE_QUERY: u8 = 0x6D;
-pub const PIN_STATE_RESPONSE: u8 = 0x6E;
-pub const EXTENDED_ANALOG: u8 = 0x6F;
-pub const SERVO_CONFIG: u8 = 0x70;
-pub const STRING_DATA: u8 = 0x71;
-pub const STEPPER_DATA: u8 = 0x72;
-pub const ONEWIRE_DATA: u8 = 0x73;
-pub const SHIFT_DATA: u8 = 0x75;
-pub const I2C_REQUEST: u8 = 0x76;
-pub const I2C_REPLY: u8 = 0x77;
-pub const I2C_CONFIG: u8 = 0x78;
-pub const I2C_MODE_WRITE: u8 = 0x00;
-pub const I2C_MODE_READ: u8 = 0x01;
-pub const REPORT_FIRMWARE: u8 = 0x79;
-pub const PROTOCOL_VERSION: u8 = 0xF9;
-pub const SAMPLING_INTERVAL: u8 = 0x7A;
-pub const SCHEDULER_DATA: u8 = 0x7B;
-pub const SYSEX_NON_REALTIME: u8 = 0x7E;
-pub const SYSEX_REALTIME: u8 = 0x7F;
-pub const START_SYSEX: u8 = 0xF0;
-pub const END_SYSEX: u8 = 0xF7;
-pub const PIN_MODE: u8 = 0xF4;
-pub const REPORT_DIGITAL: u8 = 0xD0;
-pub const REPORT_ANALOG: u8 = 0xC0;
-pub const DIGITAL_MESSAGE: u8 = 0x90;
-pub const DIGITAL_MESSAGE_BOUND: u8 = 0x9F;
-pub const ANALOG_MESSAGE: u8 = 0xE0;
-pub const ANALOG_MESSAGE_BOUND: u8 = 0xEF;
-
-pub const INPUT: u8 = 0;
-pub const OUTPUT: u8 = 1;
-pub const ANALOG: u8 = 2;
-pub const PWM: u8 = 3;
-pub const SERVO: u8 = 4;
-pub const I2C: u8 = 6;
-pub const ONEWIRE: u8 = 7;
-pub const STEPPER: u8 = 8;
-pub const ENCODER: u8 = 9;
+mod constants;
+pub use constants::*;
 
 /// Firmata error type.
 #[derive(Debug, Snafu)]
@@ -113,6 +71,8 @@ pub enum Error {
     Utf8Error { source: std::str::Utf8Error },
     /// Message was too short.
     MessageTooShort,
+    /// Pin out of bounds: {pin} ({len}).
+    PinOutOfBounds { pin: u8, len: usize },
 }
 impl From<backoff::Error<Error>> for Error {
     fn from(value: backoff::Error<Error>) -> Self {
@@ -134,6 +94,7 @@ pub enum Message {
     EmptyResponse,
     AnalogMappingResponse,
     CapabilityResponse,
+    PinStateResponse,
     ReportFirmware,
     I2CReply,
 }
@@ -146,20 +107,27 @@ pub struct I2CReply {
     pub data: Vec<u8>,
 }
 
-/// An available pin mode.
-#[derive(Debug, Default)]
-pub struct Mode {
-    pub mode: u8,
-    pub resolution: u8,
-}
-
 /// The current state and configuration of a pin.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Pin {
-    pub modes: Vec<Mode>,
-    pub analog: bool,
-    pub value: i32,
+    /// Currently configured mode.
     pub mode: u8,
+    /// Current resolution.
+    pub resolution: u8,
+    /// All pin modes.
+    pub modes: Vec<u8>,
+    /// Pin value.
+    pub value: i32,
+}
+impl Default for Pin {
+    fn default() -> Self {
+        Self {
+            mode: PIN_MODE_ANALOG,
+            modes: vec![PIN_MODE_ANALOG],
+            resolution: DEFAULT_ANALOG_RESOLUTION,
+            value: 0,
+        }
+    }
 }
 
 /// Firmata board functionality.
@@ -349,6 +317,27 @@ impl<T: Read + Write + std::fmt::Debug> Board<T> {
             pins: vec![],
             i2c_data: vec![],
         };
+        b.query_firmware()?;
+        b.read_and_decode()?;
+        b.query_capabilities()?;
+        b.read_and_decode()?;
+        b.query_analog_mapping()?;
+        b.read_and_decode()?;
+        b.report_digital(0, 1)?;
+        b.report_digital(1, 1)?;
+        Ok(b)
+    }
+    /// Tries to create a new `Board` given a `Read+Write`.
+    #[tracing::instrument(err, ret(Display))]
+    pub fn retry_new(connection: Box<T>) -> Result<Board<T>> {
+        let mut b = Board {
+            connection,
+            firmware_name: String::new(),
+            firmware_version: String::new(),
+            protocol_version: String::new(),
+            pins: vec![],
+            i2c_data: vec![],
+        };
         b.retry_query_firmware()?;
         b.retry_read_and_decode()?;
         b.retry_query_capabilities()?;
@@ -410,7 +399,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
             START_SYSEX,
             I2C_REQUEST,
             address as u8,
-            I2C_MODE_READ << 3,
+            I2C_READ << 3,
             (size as u8) & SYSEX_REALTIME,
             (size >> 7) as u8 & SYSEX_REALTIME,
             END_SYSEX,
@@ -419,7 +408,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
 
     #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn i2c_write(&mut self, address: i32, data: &[u8]) -> Result<()> {
-        let mut buf = vec![START_SYSEX, I2C_REQUEST, address as u8, I2C_MODE_WRITE << 3];
+        let mut buf = vec![START_SYSEX, I2C_REQUEST, address as u8, I2C_WRITE << 3];
 
         for i in data.iter() {
             buf.push(i & SYSEX_REALTIME);
@@ -475,8 +464,8 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
 
     #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
     fn set_pin_mode(&mut self, pin: i32, mode: u8) -> Result<()> {
-        self.pins[pin as usize].mode = mode;
-        self.write(&[PIN_MODE, pin as u8, mode])
+        self.pins[pin as usize].modes = vec![mode];
+        self.write(&[SET_PIN_MODE, pin as u8, mode])
     }
 
     #[tracing::instrument(skip(self), err, ret, level = "DEBUG")]
@@ -486,7 +475,7 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
             .read_exact(&mut buf)
             .with_context(|_| StdIoSnafu)?;
         match buf[0] {
-            PROTOCOL_VERSION => {
+            REPORT_VERSION => {
                 self.protocol_version = format!("{:o}.{:o}", buf[1], buf[2]);
                 Ok(Message::ProtocolVersion)
             }
@@ -494,8 +483,8 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
                 if buf.len() < 3 {
                     return Err(Error::MessageTooShort);
                 }
-                let value = (buf[1] as i32) | ((buf[2] as i32) << 7);
                 let pin = ((buf[0] as i32) & 0x0F) + 14;
+                let value = (buf[1] as i32) | ((buf[2] as i32) << 7);
                 if self.pins.len() as i32 > pin {
                     self.pins[pin as usize].value = value;
                 }
@@ -510,7 +499,8 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
 
                 for i in 0..8 {
                     let pin = (8 * port) + i;
-                    if self.pins.len() as i32 > pin && self.pins[pin as usize].mode == INPUT {
+                    let mode: u8 = self.pins[pin as usize].mode;
+                    if self.pins.len() as i32 > pin && mode == PIN_MODE_INPUT {
                         self.pins[pin as usize].value = (value >> (i & 0x07)) & 0x01;
                     }
                 }
@@ -536,29 +526,40 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
                         let upper = (buf.len() - 1).min(self.pins.len() + 2);
                         while i < upper {
                             if buf[i] != 127u8 {
-                                self.pins[i - 2].analog = true;
+                                let pin = &mut self.pins[i - 2];
+                                pin.mode = PIN_MODE_ANALOG;
+                                pin.modes = vec![PIN_MODE_ANALOG];
+                                pin.resolution = DEFAULT_ANALOG_RESOLUTION;
                             }
                             i += 1;
                         }
                         Ok(Message::AnalogMappingResponse)
                     }
                     CAPABILITY_RESPONSE => {
-                        let mut pin = 0;
                         let mut i = 2;
                         self.pins = vec![];
-                        self.pins.push(Pin::default());
+                        self.pins.push(Pin::default()); // 0 is unused.
+                        let mut modes = vec![];
+                        let mut resolution = None;
                         while i < buf.len() - 1 {
+                            // Completed a pin, push and continue.
                             if buf[i] == 127u8 {
-                                pin += 1;
+                                self.pins.push(Pin {
+                                    mode: *modes.first().expect("pin mode"),
+                                    modes: modes.drain(..).collect(),
+                                    resolution: resolution.take().expect("pin resolution"),
+                                    value: 0,
+                                });
+
                                 i += 1;
-                                self.pins.push(Pin::default());
-                                continue;
+                            } else {
+                                modes.push(buf[i]);
+                                if resolution.is_none() {
+                                    // Only keep the first.
+                                    resolution.replace(buf[i + 1]);
+                                }
+                                i += 2;
                             }
-                            self.pins[pin].modes.push(Mode {
-                                mode: buf[i],
-                                resolution: buf[i + 1],
-                            });
-                            i += 2;
                         }
                         Ok(Message::CapabilityResponse)
                     }
@@ -597,6 +598,18 @@ impl<T: Read + Write + std::fmt::Debug> Firmata for Board<T> {
                         }
                         self.i2c_data.push(reply);
                         Ok(Message::I2CReply)
+                    }
+                    PIN_STATE_RESPONSE => {
+                        let pin = buf[2];
+                        if buf[3] == END_SYSEX {
+                            return Ok(Message::PinStateResponse);
+                        }
+                        let pin = &mut self.pins[pin as usize];
+                        pin.modes = vec![buf[3]];
+                        // TODO: Extended values.
+                        pin.value = buf[4] as i32;
+
+                        Ok(Message::PinStateResponse)
                     }
                     _ => Err(Error::UnknownSysEx { code: buf[1] }),
                 }
