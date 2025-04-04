@@ -1,5 +1,11 @@
 # Firmata client library in Rust
 
+## DISCLAIMER
+This is a fork of the original library hosted at [gitlab](https://gitlab.com/Tiemen/firmata-rs).
+I would love to push the changes upstream, but this is highly untested code.
+
+---
+
 Control your [Firmata](https://github.com/firmata/protocol) devices from Rust!
 
 The library comes with a Board struct, which you can initialize with any object that implements
