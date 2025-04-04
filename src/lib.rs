@@ -306,6 +306,33 @@ impl<T: Read + Write + std::fmt::Debug> Board<T> {
 }
 
 impl<T: Read + Write + std::fmt::Debug> Board<T> {
+    fn initialize_board(&mut self) -> Result<()> {
+        self.query_firmware()?;
+        self.query_capabilities()?;
+        self.query_analog_mapping()?;
+
+        // Wait a little for the messages to queue up
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+
+        let mut received_firmware = false;
+        let mut received_capabilities = false;
+        let mut received_analog_mapping = false;
+
+        while !received_firmware || !received_capabilities || !received_analog_mapping {
+            match self.read_and_decode() {
+                Ok(Message::ReportFirmware) => received_firmware = true,
+                Ok(Message::CapabilityResponse) => received_capabilities = true,
+                Ok(Message::AnalogMappingResponse) => received_analog_mapping = true,
+                Ok(_) => {} // Received some other message, continue waiting
+                Err(e) => return Err(e),
+            }
+        }
+
+        self.report_digital(0, 1)?;
+        self.report_digital(1, 1)?;
+
+        Ok(())
+    }
     /// Creates a new `Board` given a `Read+Write`.
     #[tracing::instrument(err, ret(Display))]
     pub fn new(connection: Box<T>) -> Result<Board<T>> {
@@ -317,14 +344,7 @@ impl<T: Read + Write + std::fmt::Debug> Board<T> {
             pins: vec![],
             i2c_data: vec![],
         };
-        b.query_firmware()?;
-        b.read_and_decode()?;
-        b.query_capabilities()?;
-        b.read_and_decode()?;
-        b.query_analog_mapping()?;
-        b.read_and_decode()?;
-        b.report_digital(0, 1)?;
-        b.report_digital(1, 1)?;
+        b.initialize_board()?;
         Ok(b)
     }
     /// Tries to create a new `Board` given a `Read+Write`.
@@ -338,14 +358,7 @@ impl<T: Read + Write + std::fmt::Debug> Board<T> {
             pins: vec![],
             i2c_data: vec![],
         };
-        b.retry_query_firmware()?;
-        b.retry_read_and_decode()?;
-        b.retry_query_capabilities()?;
-        b.retry_read_and_decode()?;
-        b.retry_query_analog_mapping()?;
-        b.retry_read_and_decode()?;
-        b.retry_report_digital(0, 1)?;
-        b.retry_report_digital(1, 1)?;
+        b.initialize_board()?;
         Ok(b)
     }
 }
