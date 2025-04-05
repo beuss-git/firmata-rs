@@ -312,7 +312,7 @@ impl<T: Read + Write + std::fmt::Debug> Board<T> {
         self.query_analog_mapping()?;
 
         // Wait a little for the messages to queue up
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         let mut received_firmware = false;
         let mut received_capabilities = false;
@@ -324,6 +324,10 @@ impl<T: Read + Write + std::fmt::Debug> Board<T> {
                 Ok(Message::CapabilityResponse) => received_capabilities = true,
                 Ok(Message::AnalogMappingResponse) => received_analog_mapping = true,
                 Ok(_) => {} // Received some other message, continue waiting
+                Err(Error::BadByte { .. }) => {
+                    // Just ignore bad bytes during initialization
+                    continue;
+                }
                 Err(e) => return Err(e),
             }
         }
